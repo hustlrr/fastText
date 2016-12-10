@@ -17,304 +17,316 @@
 
 namespace fasttext {
 
-Model::Model(std::shared_ptr<Matrix> wi,
-             std::shared_ptr<Matrix> wo,
-             std::shared_ptr<Args> args,
-             int32_t seed)
-  : hidden_(args->dim), output_(wo->m_), grad_(args->dim), rng(seed)
-{
-  wi_ = wi;
-  wo_ = wo;
-  args_ = args;
-  isz_ = wi->m_;
-  osz_ = wo->m_;
-  hsz_ = args->dim;
-  negpos = 0;
-  loss_ = 0.0;
-  nexamples_ = 1;
-  initSigmoid();
-  initLog();
-}
-
-Model::~Model() {
-  delete[] t_sigmoid;
-  delete[] t_log;
-}
-
-real Model::binaryLogistic(int32_t target, bool label, real lr) {
-  real score = sigmoid(wo_->dotRow(hidden_, target));
-  real alpha = lr * (real(label) - score);
-  grad_.addRow(*wo_, target, alpha);
-  wo_->addRow(hidden_, target, alpha);
-  if (label) {
-    return -log(score);
-  } else {
-    return -log(1.0 - score);
-  }
-}
-
-real Model::negativeSampling(int32_t target, real lr) {
-  real loss = 0.0;
-  grad_.zero();
-  for (int32_t n = 0; n <= args_->neg; n++) {
-    if (n == 0) {
-      loss += binaryLogistic(target, true, lr);
-    } else {
-      loss += binaryLogistic(getNegative(target), false, lr);
+    Model::Model(std::shared_ptr<Matrix> wi,
+                 std::shared_ptr<Matrix> wo,
+                 std::shared_ptr<Args> args,
+                 int32_t seed)
+            : hidden_(args->dim), output_(wo->m_), grad_(args->dim), rng(seed) {
+        wi_ = wi;
+        wo_ = wo;
+        args_ = args;
+        isz_ = wi->m_;
+        osz_ = wo->m_;
+        hsz_ = args->dim;
+        negpos = 0;
+        loss_ = 0.0;
+        nexamples_ = 1;
+        initSigmoid();
+        initLog();
     }
-  }
-  return loss;
-}
 
-real Model::hierarchicalSoftmax(int32_t target, real lr) {
-  real loss = 0.0;
-  grad_.zero();
-  const std::vector<bool>& binaryCode = codes[target];
-  const std::vector<int32_t>& pathToRoot = paths[target];
-  for (int32_t i = 0; i < pathToRoot.size(); i++) {
-    loss += binaryLogistic(pathToRoot[i], binaryCode[i], lr);
-  }
-  return loss;
-}
-
-void Model::computeOutputSoftmax(Vector& hidden, Vector& output) const {
-  output.mul(*wo_, hidden);
-  real max = output[0], z = 0.0;
-  for (int32_t i = 0; i < osz_; i++) {
-    max = std::max(output[i], max);
-  }
-  for (int32_t i = 0; i < osz_; i++) {
-    output[i] = exp(output[i] - max);
-    z += output[i];
-  }
-  for (int32_t i = 0; i < osz_; i++) {
-    output[i] /= z;
-  }
-}
-
-void Model::computeOutputSoftmax() {
-  computeOutputSoftmax(hidden_, output_);
-}
-
-real Model::softmax(int32_t target, real lr) {
-  grad_.zero();
-  computeOutputSoftmax();
-  for (int32_t i = 0; i < osz_; i++) {
-    real label = (i == target) ? 1.0 : 0.0;
-    real alpha = lr * (label - output_[i]);
-    grad_.addRow(*wo_, i, alpha);
-    wo_->addRow(hidden_, i, alpha);
-  }
-  return -log(output_[target]);
-}
-
-void Model::computeHidden(const std::vector<int32_t>& input, Vector& hidden) const {
-  assert(hidden.size() == hsz_);
-  hidden.zero();
-  for (auto it = input.cbegin(); it != input.cend(); ++it) {
-    hidden.addRow(*wi_, *it);
-  }
-  hidden.mul(1.0 / input.size());
-}
-
-bool Model::comparePairs(const std::pair<real, int32_t> &l,
-                         const std::pair<real, int32_t> &r) {
-  return l.first > r.first;
-}
-
-void Model::predict(const std::vector<int32_t>& input, int32_t k,
-                    std::vector<std::pair<real, int32_t>>& heap,
-                    Vector& hidden, Vector& output) const {
-  assert(k > 0);
-  heap.reserve(k + 1);
-  computeHidden(input, hidden);
-  if (args_->loss == loss_name::hs) {
-    dfs(k, 2 * osz_ - 2, 0.0, heap, hidden);
-  } else {
-    findKBest(k, heap, hidden, output);
-  }
-  std::sort_heap(heap.begin(), heap.end(), comparePairs);
-}
-
-void Model::predict(const std::vector<int32_t>& input, int32_t k,
-                    std::vector<std::pair<real, int32_t>>& heap) {
-  predict(input, k, heap, hidden_, output_);
-}
-
-void Model::findKBest(int32_t k, std::vector<std::pair<real, int32_t>>& heap,
-                      Vector& hidden, Vector& output) const {
-  computeOutputSoftmax(hidden, output);
-  for (int32_t i = 0; i < osz_; i++) {
-    if (heap.size() == k && log(output[i]) < heap.front().first) {
-      continue;
+    Model::~Model() {
+        delete[] t_sigmoid;
+        delete[] t_log;
     }
-    heap.push_back(std::make_pair(log(output[i]), i));
-    std::push_heap(heap.begin(), heap.end(), comparePairs);
-    if (heap.size() > k) {
-      std::pop_heap(heap.begin(), heap.end(), comparePairs);
-      heap.pop_back();
+
+    real Model::binaryLogistic(int32_t target, bool label, real lr) {
+        real score = sigmoid(wo_->dotRow(hidden_, target));
+        real alpha = lr * (real(label) - score);
+        grad_.addRow(*wo_, target, alpha);  /*loss对hidden_的梯度累加到grad_上*/
+        wo_->addRow(hidden_, target, alpha);    /*loss对LR参数的梯度累加到wo_的对应行上面*/
+        if (label) {
+            return -log(score);
+        } else {
+            return -log(1.0 - score);
+        }
     }
-  }
-}
 
-void Model::dfs(int32_t k, int32_t node, real score,
-                std::vector<std::pair<real, int32_t>>& heap,
-                Vector& hidden) const {
-  if (heap.size() == k && score < heap.front().first) {
-    return;
-  }
-
-  if (tree[node].left == -1 && tree[node].right == -1) {
-    heap.push_back(std::make_pair(score, node));
-    std::push_heap(heap.begin(), heap.end(), comparePairs);
-    if (heap.size() > k) {
-      std::pop_heap(heap.begin(), heap.end(), comparePairs);
-      heap.pop_back();
+    real Model::negativeSampling(int32_t target, real lr) {
+        real loss = 0.0;
+        grad_.zero();
+        for (int32_t n = 0; n <= args_->neg; n++) {
+            /*对正负样本分别更新LR*/
+            if (n == 0) {
+                loss += binaryLogistic(target, true, lr);
+            } else {
+                loss += binaryLogistic(getNegative(target), false, lr);
+            }
+        }
+        return loss;
     }
-    return;
-  }
 
-  real f = sigmoid(wo_->dotRow(hidden, node - osz_));
-  dfs(k, tree[node].left, score + log(1.0 - f), heap, hidden);
-  dfs(k, tree[node].right, score + log(f), heap, hidden);
-}
-
-void Model::update(const std::vector<int32_t>& input, int32_t target, real lr) {
-  assert(target >= 0);
-  assert(target < osz_);
-  if (input.size() == 0) return;
-  computeHidden(input, hidden_);
-  if (args_->loss == loss_name::ns) {
-    loss_ += negativeSampling(target, lr);
-  } else if (args_->loss == loss_name::hs) {
-    loss_ += hierarchicalSoftmax(target, lr);
-  } else {
-    loss_ += softmax(target, lr);
-  }
-  nexamples_ += 1;
-
-  if (args_->model == model_name::sup) {
-    grad_.mul(1.0 / input.size());
-  }
-  for (auto it = input.cbegin(); it != input.cend(); ++it) {
-    wi_->addRow(grad_, *it, 1.0);
-  }
-}
-
-void Model::setTargetCounts(const std::vector<int64_t>& counts) {
-  assert(counts.size() == osz_);
-  if (args_->loss == loss_name::ns) {
-    initTableNegatives(counts);
-  }
-  if (args_->loss == loss_name::hs) {
-    buildTree(counts);
-  }
-}
-
-void Model::initTableNegatives(const std::vector<int64_t>& counts) {
-  real z = 0.0;
-  for (size_t i = 0; i < counts.size(); i++) {
-    z += pow(counts[i], 0.5);
-  }
-  for (size_t i = 0; i < counts.size(); i++) {
-    real c = pow(counts[i], 0.5);
-    for (size_t j = 0; j < c * NEGATIVE_TABLE_SIZE / z; j++) {
-      negatives.push_back(i);
+    real Model::hierarchicalSoftmax(int32_t target, real lr) {
+        real loss = 0.0;
+        grad_.zero();
+        /*确定huffman路径*/
+        const std::vector<bool> &binaryCode = codes[target];
+        const std::vector<int32_t> &pathToRoot = paths[target];
+        /*对路径上的节点做LR*/
+        for (int32_t i = 0; i < pathToRoot.size(); i++) {
+            loss += binaryLogistic(pathToRoot[i], binaryCode[i], lr);
+        }
+        return loss;
     }
-  }
-  std::shuffle(negatives.begin(), negatives.end(), rng);
-}
 
-int32_t Model::getNegative(int32_t target) {
-  int32_t negative;
-  do {
-    negative = negatives[negpos];
-    negpos = (negpos + 1) % negatives.size();
-  } while (target == negative);
-  return negative;
-}
-
-void Model::buildTree(const std::vector<int64_t>& counts) {
-  tree.resize(2 * osz_ - 1);
-  for (int32_t i = 0; i < 2 * osz_ - 1; i++) {
-    tree[i].parent = -1;
-    tree[i].left = -1;
-    tree[i].right = -1;
-    tree[i].count = 1e15;
-    tree[i].binary = false;
-  }
-  for (int32_t i = 0; i < osz_; i++) {
-    tree[i].count = counts[i];
-  }
-  int32_t leaf = osz_ - 1;
-  int32_t node = osz_;
-  for (int32_t i = osz_; i < 2 * osz_ - 1; i++) {
-    int32_t mini[2];
-    for (int32_t j = 0; j < 2; j++) {
-      if (leaf >= 0 && tree[leaf].count < tree[node].count) {
-        mini[j] = leaf--;
-      } else {
-        mini[j] = node++;
-      }
+    void Model::computeOutputSoftmax(Vector &hidden, Vector &output) const {
+        output.mul(*wo_, hidden);
+        real max = output[0], z = 0.0;
+        for (int32_t i = 0; i < osz_; i++) {
+            max = std::max(output[i], max);
+        }
+        for (int32_t i = 0; i < osz_; i++) {
+            output[i] = exp(output[i] - max);
+            z += output[i];
+        }
+        for (int32_t i = 0; i < osz_; i++) {
+            output[i] /= z;
+        }
     }
-    tree[i].left = mini[0];
-    tree[i].right = mini[1];
-    tree[i].count = tree[mini[0]].count + tree[mini[1]].count;
-    tree[mini[0]].parent = i;
-    tree[mini[1]].parent = i;
-    tree[mini[1]].binary = true;
-  }
-  for (int32_t i = 0; i < osz_; i++) {
-    std::vector<int32_t> path;
-    std::vector<bool> code;
-    int32_t j = i;
-    while (tree[j].parent != -1) {
-      path.push_back(tree[j].parent - osz_);
-      code.push_back(tree[j].binary);
-      j = tree[j].parent;
+
+    void Model::computeOutputSoftmax() {
+        computeOutputSoftmax(hidden_, output_);
     }
-    paths.push_back(path);
-    codes.push_back(code);
-  }
-}
 
-real Model::getLoss() const {
-  return loss_ / nexamples_;
-}
+    /*普通softmax的参数更新*/
+    real Model::softmax(int32_t target, real lr) {
+        grad_.zero();
+        computeOutputSoftmax();
+        for (int32_t i = 0; i < osz_; i++) {
+            real label = (i == target) ? 1.0 : 0.0;
+            real alpha = lr * (label - output_[i]);
+            grad_.addRow(*wo_, i, alpha);
+            wo_->addRow(hidden_, i, alpha);
+        }
+        return -log(output_[target]);
+    }
 
-void Model::initSigmoid() {
-  t_sigmoid = new real[SIGMOID_TABLE_SIZE + 1];
-  for (int i = 0; i < SIGMOID_TABLE_SIZE + 1; i++) {
-    real x = real(i * 2 * MAX_SIGMOID) / SIGMOID_TABLE_SIZE - MAX_SIGMOID;
-    t_sigmoid[i] = 1.0 / (1.0 + std::exp(-x));
-  }
-}
+    void Model::computeHidden(const std::vector<int32_t> &input, Vector &hidden) const {
+        assert(hidden.size() == hsz_);
+        hidden.zero();
+        for (auto it = input.cbegin(); it != input.cend(); ++it) {
+            hidden.addRow(*wi_, *it);
+        }
+        hidden.mul(1.0 / input.size());
+    }
 
-void Model::initLog() {
-  t_log = new real[LOG_TABLE_SIZE + 1];
-  for (int i = 0; i < LOG_TABLE_SIZE + 1; i++) {
-    real x = (real(i) + 1e-5) / LOG_TABLE_SIZE;
-    t_log[i] = std::log(x);
-  }
-}
+    bool Model::comparePairs(const std::pair<real, int32_t> &l,
+                             const std::pair<real, int32_t> &r) {
+        return l.first > r.first;
+    }
 
-real Model::log(real x) const {
-  if (x > 1.0) {
-    return 0.0;
-  }
-  int i = int(x * LOG_TABLE_SIZE);
-  return t_log[i];
-}
+    void Model::predict(const std::vector<int32_t> &input, int32_t k,
+                        std::vector<std::pair<real, int32_t>> &heap,
+                        Vector &hidden, Vector &output) const {
+        assert(k > 0);
+        heap.reserve(k + 1);
+        /*计算hidden_*/
+        computeHidden(input, hidden);
+        if (args_->loss == loss_name::hs) {
+            /*如果是层次softmax，使用dfs遍历huffman树的所有叶子节点，找到top-k的概率*/
+            dfs(k, 2 * osz_ - 2, 0.0, heap, hidden);
+        } else {
+            /*如果是普通softmax，在结果数组中寻找top-k*/
+            findKBest(k, heap, hidden, output);
+        }
+        /*对top-k排序后输出*/
+        std::sort_heap(heap.begin(), heap.end(), comparePairs);
+    }
 
-real Model::sigmoid(real x) const {
-  if (x < -MAX_SIGMOID) {
-    return 0.0;
-  } else if (x > MAX_SIGMOID) {
-    return 1.0;
-  } else {
-    int i = int((x + MAX_SIGMOID) * SIGMOID_TABLE_SIZE / MAX_SIGMOID / 2);
-    return t_sigmoid[i];
-  }
-}
+    void Model::predict(const std::vector<int32_t> &input, int32_t k,
+                        std::vector<std::pair<real, int32_t>> &heap) {
+        predict(input, k, heap, hidden_, output_);
+    }
+
+    void Model::findKBest(int32_t k, std::vector<std::pair<real, int32_t>> &heap,
+                          Vector &hidden, Vector &output) const {
+        computeOutputSoftmax(hidden, output);
+        for (int32_t i = 0; i < osz_; i++) {
+            if (heap.size() == k && log(output[i]) < heap.front().first) {
+                continue;
+            }
+            /*使用一个堆来保存top-k的结果*/
+            heap.push_back(std::make_pair(log(output[i]), i));
+            std::push_heap(heap.begin(), heap.end(), comparePairs);
+            if (heap.size() > k) {
+                std::pop_heap(heap.begin(), heap.end(), comparePairs);
+                heap.pop_back();
+            }
+        }
+    }
+
+    void Model::dfs(int32_t k, int32_t node, real score,
+                    std::vector<std::pair<real, int32_t>> &heap,
+                    Vector &hidden) const {
+        if (heap.size() == k && score < heap.front().first) {
+            return;
+        }
+
+        if (tree[node].left == -1 && tree[node].right == -1) {
+            /*只输出叶子节点的结果*/
+            heap.push_back(std::make_pair(score, node));
+            std::push_heap(heap.begin(), heap.end(), comparePairs);
+            if (heap.size() > k) {
+                std::pop_heap(heap.begin(), heap.end(), comparePairs);
+                heap.pop_back();
+            }
+            return;
+        }
+
+        /*将score累加后递归向下收集结果*/
+        real f = sigmoid(wo_->dotRow(hidden, node - osz_));
+        dfs(k, tree[node].left, score + log(1.0 - f), heap, hidden);
+        dfs(k, tree[node].right, score + log(f), heap, hidden);
+    }
+
+    void Model::update(const std::vector<int32_t> &input, int32_t target, real lr) {
+        assert(target >= 0);
+        assert(target < osz_);
+        if (input.size() == 0) return;
+        /*输入层到隐藏层，前向传播计算*/
+        computeHidden(input, hidden_);
+        if (args_->loss == loss_name::ns) {
+            loss_ += negativeSampling(target, lr);
+        } else if (args_->loss == loss_name::hs) {
+            loss_ += hierarchicalSoftmax(target, lr);
+        } else {
+            loss_ += softmax(target, lr);
+        }
+        nexamples_ += 1;
+
+        if (args_->model == model_name::sup) {
+            grad_.mul(1.0 / input.size());
+        }
+        /*反向传播，将hidden_上的梯度传到wi_*/
+        for (auto it = input.cbegin(); it != input.cend(); ++it) {
+            wi_->addRow(grad_, *it, 1.0);
+        }
+    }
+
+    void Model::setTargetCounts(const std::vector<int64_t> &counts) {
+        assert(counts.size() == osz_);
+        if (args_->loss == loss_name::ns) {
+            initTableNegatives(counts);
+        }
+        if (args_->loss == loss_name::hs) {
+            buildTree(counts);
+        }
+    }
+
+    void Model::initTableNegatives(const std::vector<int64_t> &counts) {
+        real z = 0.0;
+        for (size_t i = 0; i < counts.size(); i++) {
+            z += pow(counts[i], 0.5);
+        }
+        for (size_t i = 0; i < counts.size(); i++) {
+            real c = pow(counts[i], 0.5);
+            for (size_t j = 0; j < c * NEGATIVE_TABLE_SIZE / z; j++) {
+                negatives.push_back(i);
+            }
+        }
+        std::shuffle(negatives.begin(), negatives.end(), rng);
+    }
+
+    int32_t Model::getNegative(int32_t target) {
+        int32_t negative;
+        do {
+            negative = negatives[negpos];
+            negpos = (negpos + 1) % negatives.size();
+        } while (target == negative);
+        return negative;
+    }
+
+    void Model::buildTree(const std::vector<int64_t> &counts) {
+        tree.resize(2 * osz_ - 1);
+        for (int32_t i = 0; i < 2 * osz_ - 1; i++) {
+            tree[i].parent = -1;
+            tree[i].left = -1;
+            tree[i].right = -1;
+            tree[i].count = 1e15;
+            tree[i].binary = false;
+        }
+        for (int32_t i = 0; i < osz_; i++) {
+            tree[i].count = counts[i];
+        }
+        int32_t leaf = osz_ - 1;
+        int32_t node = osz_;
+        for (int32_t i = osz_; i < 2 * osz_ - 1; i++) {
+            int32_t mini[2];
+            for (int32_t j = 0; j < 2; j++) {
+                if (leaf >= 0 && tree[leaf].count < tree[node].count) {
+                    mini[j] = leaf--;
+                } else {
+                    mini[j] = node++;
+                }
+            }
+            tree[i].left = mini[0];
+            tree[i].right = mini[1];
+            tree[i].count = tree[mini[0]].count + tree[mini[1]].count;
+            tree[mini[0]].parent = i;
+            tree[mini[1]].parent = i;
+            tree[mini[1]].binary = true;
+        }
+        for (int32_t i = 0; i < osz_; i++) {
+            std::vector<int32_t> path;
+            std::vector<bool> code;
+            int32_t j = i;
+            while (tree[j].parent != -1) {
+                path.push_back(tree[j].parent - osz_);
+                code.push_back(tree[j].binary);
+                j = tree[j].parent;
+            }
+            paths.push_back(path);
+            codes.push_back(code);
+        }
+    }
+
+    real Model::getLoss() const {
+        return loss_ / nexamples_;
+    }
+
+    void Model::initSigmoid() {
+        t_sigmoid = new real[SIGMOID_TABLE_SIZE + 1];
+        for (int i = 0; i < SIGMOID_TABLE_SIZE + 1; i++) {
+            real x = real(i * 2 * MAX_SIGMOID) / SIGMOID_TABLE_SIZE - MAX_SIGMOID;
+            t_sigmoid[i] = 1.0 / (1.0 + std::exp(-x));
+        }
+    }
+
+    void Model::initLog() {
+        t_log = new real[LOG_TABLE_SIZE + 1];
+        for (int i = 0; i < LOG_TABLE_SIZE + 1; i++) {
+            real x = (real(i) + 1e-5) / LOG_TABLE_SIZE;
+            t_log[i] = std::log(x);
+        }
+    }
+
+    real Model::log(real x) const {
+        if (x > 1.0) {
+            return 0.0;
+        }
+        int i = int(x * LOG_TABLE_SIZE);
+        return t_log[i];
+    }
+
+    real Model::sigmoid(real x) const {
+        if (x < -MAX_SIGMOID) {
+            return 0.0;
+        } else if (x > MAX_SIGMOID) {
+            return 1.0;
+        } else {
+            int i = int((x + MAX_SIGMOID) * SIGMOID_TABLE_SIZE / MAX_SIGMOID / 2);
+            return t_sigmoid[i];
+        }
+    }
 
 }

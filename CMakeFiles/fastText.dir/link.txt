@@ -1,0 +1,1 @@
+/usr/bin/c++   -g   CMakeFiles/fastText.dir/src/args.cc.o CMakeFiles/fastText.dir/src/dictionary.cc.o CMakeFiles/fastText.dir/src/fasttext.cc.o CMakeFiles/fastText.dir/src/main.cc.o CMakeFiles/fastText.dir/src/matrix.cc.o CMakeFiles/fastText.dir/src/model.cc.o CMakeFiles/fastText.dir/src/utils.cc.o CMakeFiles/fastText.dir/src/vector.cc.o  -o fastText -lpthread 

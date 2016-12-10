@@ -1,0 +1,3 @@
+/home/lruoran/c++/fastText/CMakeFiles/edit_cache.dir
+/home/lruoran/c++/fastText/CMakeFiles/rebuild_cache.dir
+/home/lruoran/c++/fastText/CMakeFiles/fastText.dir
